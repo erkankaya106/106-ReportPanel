@@ -111,112 +111,112 @@ class Command(BaseCommand):
         
         # Validator callback fonksiyonu (YENİ: Dosya bazında özet, S3 stream desteği)
         def validate_file_callback(task: FileTask) -> Dict[str, Any]:
-                nonlocal global_total_rows, global_total_errors, category_stats, s3_client
-                
-                # Validator oluştur
-                validator = CSVValidator()
-                
-                # S3 veya local mode'a göre validate et
-                if task.s3_key:
-                    # S3 Stream mode - direk S3'ten oku
-                    try:
-                        response = s3_client.get_object(
-                            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                            Key=task.s3_key
-                        )
-                        stream = response['Body']
-                        is_valid, errors = validator.validate_stream(stream)
-                    except Exception as e:
-                        # S3 okuma hatası
-                        self.stdout.write(self.style.ERROR(
-                            f'[HATA] S3 stream okuma hatasi ({task.s3_key}): {str(e)}'
-                        ))
-                        return {
-                            'processed_rows': 0,
-                            'errors_found': 0
-                        }
-                else:
-                    # Local file mode
-                    is_valid, errors = validator.validate_file(str(task.file_path))
-                
-                # Bayi'yi al
-                bayi = None
-                if task.bayi_id:
-                    try:
-                        bayi = Bayi.objects.get(id=task.bayi_id)
-                    except Bayi.DoesNotExist:
-                        pass
-                
-                # Filename belirle
-                filename = task.filename or (task.file_path.name if task.file_path else task.s3_key.split('/')[-1])
-                
-                # ÖZET KAYDET (tek kayıt per dosya)
-                summary = logger.log_file_validation_summary(
-                    filename=filename,
-                    validation_date=target_date,
-                    validator=validator,
-                    bayi=bayi,
-                    save_to_db=not dry_run
-                )
-                
-                # Global istatistikleri güncelle
-                global_total_rows += validator.validated_rows
-                global_total_errors += len(errors)
-                category_stats[summary['category']] += 1
-                
-                # Console output (akıllı format)
-                console_output = SmartMessageFormatter.format_console_output(
-                    filename=filename,
-                    total_rows=validator.validated_rows,
-                    error_count=len(errors),
-                    accuracy_rate=summary['accuracy_rate']
-                )
-                self.stdout.write(console_output)
-                
-                return {
-                    'processed_rows': validator.validated_rows,
-                    'errors_found': len(errors)
-                }
+            nonlocal global_total_rows, global_total_errors, category_stats, s3_client
             
-            # Queue Manager'ı başlat
-            queue_manager = ValidationQueueManager(
-                validator_callback=validate_file_callback,
-                num_workers=num_workers
+            # Validator oluştur
+            validator = CSVValidator()
+            
+            # S3 veya local mode'a göre validate et
+            if task.s3_key:
+                # S3 Stream mode - direk S3'ten oku
+                try:
+                    response = s3_client.get_object(
+                        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                        Key=task.s3_key
+                    )
+                    stream = response['Body']
+                    is_valid, errors = validator.validate_stream(stream)
+                except Exception as e:
+                    # S3 okuma hatası
+                    self.stdout.write(self.style.ERROR(
+                        f'[HATA] S3 stream okuma hatasi ({task.s3_key}): {str(e)}'
+                    ))
+                    return {
+                        'processed_rows': 0,
+                        'errors_found': 0
+                    }
+            else:
+                # Local file mode
+                is_valid, errors = validator.validate_file(str(task.file_path))
+            
+            # Bayi'yi al
+            bayi = None
+            if task.bayi_id:
+                try:
+                    bayi = Bayi.objects.get(id=task.bayi_id)
+                except Bayi.DoesNotExist:
+                    pass
+            
+            # Filename belirle
+            filename = task.filename or (task.file_path.name if task.file_path else task.s3_key.split('/')[-1])
+            
+            # ÖZET KAYDET (tek kayıt per dosya)
+            summary = logger.log_file_validation_summary(
+                filename=filename,
+                validation_date=target_date,
+                validator=validator,
+                bayi=bayi,
+                save_to_db=not dry_run
             )
             
-            queue_manager.start()
+            # Global istatistikleri güncelle
+            global_total_rows += validator.validated_rows
+            global_total_errors += len(errors)
+            category_stats[summary['category']] += 1
             
-            # Dosyaları kuyruğa ekle
-            queue_manager.add_files(file_tasks)
-            
-            # İşlemlerin tamamlanmasını bekle
-            self.stdout.write('\nIslemler devam ediyor...\n')
-            queue_manager.wait_completion()
-            
-            # İstatistikleri al
-            stats = queue_manager.get_stats()
-            processing_time = time.time() - start_time
-            
-            # Session özetini logla
-            logger.log_session_summary(
-                total_files=stats.total_files,
-                processed_files=stats.processed_files,
-                total_rows=global_total_rows,
-                total_errors=global_total_errors,
-                processing_time=processing_time,
-                category_stats=category_stats
+            # Console output (akıllı format)
+            console_output = SmartMessageFormatter.format_console_output(
+                filename=filename,
+                total_rows=validator.validated_rows,
+                error_count=len(errors),
+                accuracy_rate=summary['accuracy_rate']
             )
+            self.stdout.write(console_output)
             
-            # Sonuç raporunu yazdır
-            self._print_summary(
-                stats=stats,
-                total_rows=global_total_rows,
-                total_errors=global_total_errors,
-                category_stats=category_stats,
-                processing_time=processing_time,
-                log_file=logger.get_log_file_path(),
-                dry_run=dry_run
-            )
+            return {
+                'processed_rows': validator.validated_rows,
+                'errors_found': len(errors)
+            }
+        
+        # Queue Manager'ı başlat
+        queue_manager = ValidationQueueManager(
+            validator_callback=validate_file_callback,
+            num_workers=num_workers
+        )
+        
+        queue_manager.start()
+        
+        # Dosyaları kuyruğa ekle
+        queue_manager.add_files(file_tasks)
+        
+        # İşlemlerin tamamlanmasını bekle
+        self.stdout.write('\nIslemler devam ediyor...\n')
+        queue_manager.wait_completion()
+        
+        # İstatistikleri al
+        stats = queue_manager.get_stats()
+        processing_time = time.time() - start_time
+        
+        # Session özetini logla
+        logger.log_session_summary(
+            total_files=stats.total_files,
+            processed_files=stats.processed_files,
+            total_rows=global_total_rows,
+            total_errors=global_total_errors,
+            processing_time=processing_time,
+            category_stats=category_stats
+        )
+        
+        # Sonuç raporunu yazdır
+        self._print_summary(
+            stats=stats,
+            total_rows=global_total_rows,
+            total_errors=global_total_errors,
+            category_stats=category_stats,
+            processing_time=processing_time,
+            log_file=logger.get_log_file_path(),
+            dry_run=dry_run
+        )
     
     def _get_target_date(self, date_str: Optional[str]) -> str:
         """Hedef tarihi belirler (YYYY-MM-DD formatında)"""
