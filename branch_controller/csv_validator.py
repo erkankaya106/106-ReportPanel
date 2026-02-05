@@ -124,16 +124,19 @@ class CSVValidator:
         self.validated_rows = 0
         
         try:
-            # Wrap binary stream in TextIOWrapper if needed
-            if isinstance(stream, (io.BytesIO, io.BufferedReader)) or hasattr(stream, 'read') and not hasattr(stream, 'readline'):
-                # If it's a binary stream or boto3 StreamingBody, wrap it
-                text_stream = io.TextIOWrapper(stream, encoding=encoding)
+            # Read content from stream
+            if hasattr(stream, 'read'):
+                content = stream.read()
+                
+                # If binary, decode to string
+                if isinstance(content, bytes):
+                    content = content.decode(encoding)
+                
+                # Split into lines
+                lines = content.splitlines()
             else:
-                # Already a text stream
-                text_stream = stream
-            
-            # Read all lines
-            lines = text_stream.readlines()
+                # Already an iterable of lines
+                lines = list(stream)
             
             if not lines:
                 self.errors.append(CSVValidationError(
