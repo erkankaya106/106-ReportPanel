@@ -29,3 +29,8 @@ db.sqlite3-journal
 # OS
 .DS_Store
 Thumbs.db
+
+# Local test & fake storage
+logs/
+local_s3/
+*.csv
