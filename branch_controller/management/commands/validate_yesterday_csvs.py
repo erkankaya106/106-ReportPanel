@@ -136,8 +136,8 @@ class Command(BaseCommand):
                         'errors_found': 0
                     }
             else:
-                # Local file mode
-                is_valid, errors = validator.validate_file(str(task.file_path))
+                # Local file mode — ChunkedFileReader ile memory-safe işlem
+                is_valid, errors = validator.validate_file_chunked(str(task.file_path))
             
             # Bayi'yi al
             bayi = None
