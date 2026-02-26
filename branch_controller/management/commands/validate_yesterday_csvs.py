@@ -116,6 +116,17 @@ class Command(BaseCommand):
             )
             csv_type = FILENAME_TO_TYPE.get(filename.lower())
 
+            # CSV'nin gerçek partition tarihi — FileTask'tan gelir, yoksa scan tarihine düşer
+            from datetime import date as date_type
+            csv_date_str = task.csv_date  # "2026-02-26" ya da None
+            if csv_date_str:
+                try:
+                    validation_date = datetime.strptime(csv_date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    validation_date = target_date
+            else:
+                validation_date = target_date
+
             # Tipe göre validator oluştur
             validator = CSVValidator(csv_type=csv_type)
 
@@ -144,7 +155,8 @@ class Command(BaseCommand):
 
             summary = logger.log_file_validation_summary(
                 filename=filename,
-                validation_date=target_date,
+                provider_id=task.provider_id or "",
+                validation_date=validation_date,
                 validator=validator,
                 bayi=bayi,
                 save_to_db=not dry_run,
@@ -232,7 +244,7 @@ class Command(BaseCommand):
         self,
         target_date: str,
         branch_id_filter: Optional[str] = None,
-    ) -> list[tuple[str, str, Optional[int], str]]:
+    ) -> list[tuple[str, str, Optional[int], str, str, str]]:
         """
         S3'ten Hive-partition yapısındaki CSV dosyalarını listeler.
 
@@ -240,7 +252,7 @@ class Command(BaseCommand):
             raw/branch_id={id}/provider_id={NN}/date={YYYY-MM-DD}/{bet|win|canceled}.csv
 
         Returns:
-            List of tuples: (s3_key, branch_id, bayi_id, filename)
+            List of tuples: (s3_key, branch_id, bayi_id, filename, provider_id, csv_date)
         """
         s3_client = self._get_s3_client()
         bucket_name = settings.AWS_STORAGE_BUCKET_NAME
@@ -267,7 +279,7 @@ class Command(BaseCommand):
                         continue
 
                     branch_id = match.group(1)
-                    provider_id = match.group(2)   # noqa: F841 — available if needed
+                    provider_id = match.group(2)
                     date_str = match.group(3)
                     filename = match.group(4) + ".csv"  # bet.csv / win.csv / canceled.csv
 
@@ -287,7 +299,7 @@ class Command(BaseCommand):
                         pass
 
                     file_metadata.append(
-                        (key, branch_id, bayi.id if bayi else None, filename)
+                        (key, branch_id, bayi.id if bayi else None, filename, provider_id, date_str)
                     )
 
         except Exception as e:
@@ -321,13 +333,15 @@ class Command(BaseCommand):
             self.stdout.write("S3 modunda calisiliyor (stream mode - indirme yok)...")
             s3_files = self._list_s3_csv_files(target_date, branch_id_filter)
 
-            for s3_key, branch_id, bayi_id, filename in s3_files:
+            for s3_key, branch_id, bayi_id, filename, provider_id, csv_date in s3_files:
                 file_tasks.append(FileTask(
                     file_path=None,
                     branch_id=branch_id,
                     bayi_id=bayi_id,
                     s3_key=s3_key,
                     filename=filename,
+                    provider_id=provider_id,
+                    csv_date=csv_date,
                 ))
                 self.stdout.write(f"Listelendi: {s3_key}")
 
@@ -377,6 +391,9 @@ class Command(BaseCommand):
                     if date_str != target_date:
                         continue
 
+                    # provider_id değerini klasör adından çıkar (provider_id=01 → "01")
+                    pid = provider_dir.name.split("=", 1)[1]
+
                     # bet.csv, win.csv, canceled.csv dosyalarını bul
                     for csv_name in ["bet.csv", "win.csv", "canceled.csv"]:
                         csv_path = date_dir / csv_name
@@ -386,6 +403,8 @@ class Command(BaseCommand):
                                 branch_id=branch_id,
                                 bayi_id=bayi.id if bayi else None,
                                 filename=csv_name,
+                                provider_id=pid,
+                                csv_date=date_str,
                             ))
 
         return file_tasks

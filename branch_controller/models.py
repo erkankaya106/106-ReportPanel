@@ -51,7 +51,8 @@ class CSVValidationError(models.Model):
     # Temel bilgiler
     bayi = models.ForeignKey(Bayi, on_delete=models.SET_NULL, null=True, blank=True)
     filename = models.CharField(max_length=255, db_index=True)
-    validation_date = models.DateField(db_index=True, null=True, blank=True, help_text="CSV'nin ait olduğu tarih")
+    provider_id = models.CharField(max_length=10, default="", blank=True, db_index=True, help_text="Provider ID (örn: 01, 02)")
+    validation_date = models.DateField(db_index=True, null=True, blank=True, help_text="CSV'nin ait olduğu tarih (date= partition)")
     
     # İstatistikler
     total_rows = models.IntegerField(default=0, help_text="Toplam satır sayısı (header hariç)")
@@ -92,7 +93,7 @@ class CSVValidationError(models.Model):
             models.Index(fields=['accuracy_rate']),
             models.Index(fields=['validation_date', 'detected_at']),
         ]
-        unique_together = [['bayi', 'filename', 'validation_date']]
+        unique_together = [['bayi', 'filename', 'provider_id', 'validation_date']]
         verbose_name = "CSV Validation Özeti"
         verbose_name_plural = "CSV Validation Özetleri"
     

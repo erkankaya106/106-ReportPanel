@@ -49,16 +49,18 @@ class ValidationLogger:
         validation_date: date,
         validator: CSVValidator,
         bayi: Optional[Bayi] = None,
+        provider_id: str = "",
         save_to_db: bool = True
     ) -> Dict[str, Any]:
         """
         Dosya validation özetini DB ve log dosyasına kaydeder.
         
         Args:
-            filename: CSV dosya adı
-            validation_date: CSV'nin ait olduğu tarih
+            filename: CSV dosya adı (bet.csv / win.csv / canceled.csv)
+            validation_date: CSV'nin ait olduğu tarih (date= partition'dan)
             validator: Validation sonuçlarını içeren validator instance
             bayi: İlgili bayi (opsiyonel)
+            provider_id: Provider ID string (örn: "01", "02")
             save_to_db: DB'ye kaydetme durumu (dry-run için False)
         
         Returns:
@@ -81,13 +83,13 @@ class ValidationLogger:
             error_summary=error_summary
         )
         
-        # DB'ye kaydet (tek kayıt)
+        # DB'ye kaydet (tek kayıt per bayi+filename+provider_id+tarih)
         if save_to_db:
             try:
-                # Unique constraint'e göre update or create
                 obj, created = CSVValidationErrorModel.objects.update_or_create(
                     bayi=bayi,
                     filename=filename,
+                    provider_id=provider_id,
                     validation_date=validation_date,
                     defaults={
                         'total_rows': total_rows,
@@ -98,7 +100,7 @@ class ValidationLogger:
                     }
                 )
                 action = "created" if created else "updated"
-                print(f"[ValidationLogger] DB record {action}: {filename}")
+                print(f"[ValidationLogger] DB record {action}: provider={provider_id} {filename} ({validation_date})")
             except Exception as e:
                 print(f"[ValidationLogger] DB kayıt hatası: {e}")
         
@@ -112,6 +114,7 @@ class ValidationLogger:
         )
         json_summary['session_id'] = self.session_id
         json_summary['validation_date'] = str(validation_date)
+        json_summary['provider_id'] = provider_id
         json_summary['branch_id'] = bayi.branch_id if bayi else None
         json_summary['timestamp'] = datetime.now().isoformat()
         
@@ -119,6 +122,7 @@ class ValidationLogger:
         
         return {
             'filename': filename,
+            'provider_id': provider_id,
             'total_rows': total_rows,
             'error_count': error_count,
             'accuracy_rate': accuracy_rate,

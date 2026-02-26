@@ -48,8 +48,10 @@ class FileTask:
     file_path: Optional[Path] = None  # None for S3 mode
     branch_id: Optional[str] = None
     bayi_id: Optional[int] = None
-    s3_key: Optional[str] = None  # S3 key if streaming from S3
-    filename: Optional[str] = None  # Explicit filename for display
+    s3_key: Optional[str] = None      # S3 key if streaming from S3
+    filename: Optional[str] = None    # Explicit filename for display
+    provider_id: Optional[str] = None # provider_id= partition değeri (örn: "01")
+    csv_date: Optional[str] = None    # date= partition değeri (örn: "2026-02-26")
 
 
 class ValidationQueueManager:
