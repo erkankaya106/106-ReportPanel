@@ -36,6 +36,8 @@ class TransferLog(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     error_message = models.TextField(null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True)
+    # Replay saldırı koruması: HMAC imzası kaydedilir, 5 dk içinde aynı imza reddedilir
+    signature = models.CharField(max_length=64, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

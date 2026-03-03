@@ -18,11 +18,11 @@ from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 
 from django.contrib import admin
 from django.urls import path , include
-from branch_controller.views import enterprise_upload
+from branch_controller.views import mpi_raw_transactions_data
 
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("enterprise-upload/", enterprise_upload, name="enterprise_upload"),
+    path("mpi-raw-transactions-data/", mpi_raw_transactions_data, name="mpi_raw_transactions_data"),
 ]
 urlpatterns += staticfiles_urlpatterns()

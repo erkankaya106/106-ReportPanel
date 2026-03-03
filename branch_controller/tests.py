@@ -30,7 +30,7 @@ class BranchUploadTests(TestCase):
             secret_key=self.secret_key,
             is_active=True,
         )
-        self.url = reverse("enterprise_upload")
+        self.url = reverse("mpi_raw_transactions_data")
 
     def _make_file(self, name: str, content: bytes | None = None) -> SimpleUploadedFile:
         if content is None:

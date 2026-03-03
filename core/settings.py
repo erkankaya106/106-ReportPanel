@@ -142,6 +142,14 @@ AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME")
 
 AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "eu-central-1")
 
+# ========================
+# Upload Boyut Limitleri
+# ========================
+# Django framework seviyesinde 100 MB sınırı (business logic ile aynı hizada)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024   # 100 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024   # 100 MB (disk geçiş eşiği)
+# Not: Nginx tarafında da `client_max_body_size 105m;` ayarlanmalıdır.
+
 
 # USE_LOCAL_FAKE_S3 = os.getenv("USE_LOCAL_FAKE_S3", "false").lower() == "true"
 # LOCAL_S3_BASE_DIR = BASE_DIR / "local_s3"

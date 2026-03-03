@@ -5,12 +5,13 @@ import shutil
 import tempfile
 import time
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import boto3
 from django.conf import settings
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import Bayi, TransferLog
@@ -19,6 +20,12 @@ from .models import Bayi, TransferLog
 MAX_ZIP_SIZE_MB = 100
 MAX_CSV_FILES_PER_ZIP = 500          # provider × date × 3 dosya
 TIMESTAMP_TOLERANCE_SECONDS = 300    # 5 dakika
+
+# ZIP bomb koruması
+MAX_UNCOMPRESSED_MB   = 500          # ZIP açıldığında toplam disk kullanımı
+MAX_SINGLE_FILE_MB    = 50           # Tek dosya limiti
+MAX_COMPRESSION_RATIO = 100          # Şüpheli sıkıştırma oranı eşiği
+MAX_FILES_IN_ZIP      = 600          # ZIP içindeki maksimum dosya sayısı
 
 # Her provider_id klasörü içinde bulunması zorunlu CSV dosya adları
 REQUIRED_CSV_FILES = {"bet.csv", "win.csv", "canceled.csv"}
@@ -308,13 +315,64 @@ def extract_and_validate_zip(
         # ZIP'i çıkar
         try:
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
-                for zip_info in zip_ref.infolist():
-                    if zip_info.filename.startswith("/") or ".." in zip_info.filename:
+                all_entries = zip_ref.infolist()
+
+                # Dosya sayısı kontrolü (ZIP bomb)
+                if len(all_entries) > MAX_FILES_IN_ZIP:
+                    return (
+                        False,
+                        f"ZIP içinde çok fazla dosya ({len(all_entries)}). "
+                        f"Maksimum: {MAX_FILES_IN_ZIP}",
+                        temp_dir, "", [],
+                    )
+
+                total_uncompressed = 0
+                for zip_info in all_entries:
+                    name = zip_info.filename
+
+                    # Path traversal koruması (geliştirilmiş)
+                    if (
+                        name.startswith("/")
+                        or ".." in name
+                        or "\\" in name
+                        or "\x00" in name
+                        or (len(name) > 1 and name[1] == ":")
+                    ):
                         return (
                             False,
                             "Güvenlik hatası: ZIP içinde geçersiz dosya yolu",
                             temp_dir, "", [],
                         )
+
+                    # ZIP bomb — tek dosya boyutu
+                    if zip_info.file_size > MAX_SINGLE_FILE_MB * 1024 * 1024:
+                        return (
+                            False,
+                            f"ZIP içinde tek dosya çok büyük ({zip_info.file_size // (1024*1024)} MB). "
+                            f"Maksimum: {MAX_SINGLE_FILE_MB} MB",
+                            temp_dir, "", [],
+                        )
+
+                    # ZIP bomb — toplam uncompressed boyut
+                    total_uncompressed += zip_info.file_size
+                    if total_uncompressed > MAX_UNCOMPRESSED_MB * 1024 * 1024:
+                        return (
+                            False,
+                            f"ZIP açık boyutu sınırı aşıyor. Maksimum: {MAX_UNCOMPRESSED_MB} MB",
+                            temp_dir, "", [],
+                        )
+
+                    # ZIP bomb — şüpheli sıkıştırma oranı
+                    if (
+                        zip_info.compress_size > 0
+                        and zip_info.file_size / zip_info.compress_size > MAX_COMPRESSION_RATIO
+                    ):
+                        return (
+                            False,
+                            f"ZIP içinde şüpheli sıkıştırma oranı tespit edildi: {zip_info.filename}",
+                            temp_dir, "", [],
+                        )
+
                 zip_ref.extractall(temp_dir)
         except zipfile.BadZipFile:
             return False, "Geçersiz veya bozuk ZIP dosyası", temp_dir, "", []
@@ -389,7 +447,7 @@ def copy_csv_entries_to_storage(csv_entries: list[dict], branch_id: str):
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @csrf_exempt
-def enterprise_upload(request):
+def mpi_raw_transactions_data(request):
     """
     ZIP dosyası yükleme endpoint'i.
 
@@ -445,11 +503,25 @@ def enterprise_upload(request):
             {"status": "error", "message": "İstek süresi dolmuş"}, status=403
         )
 
-    # 5b. HMAC imza kontrolü  (branch_id + zip_filename + timestamp)
-    message = f"{branch_id}{uploaded_file.name}{timestamp}"
+    # 5b. Dosya SHA-256 hash'i hesapla (içerik imzalanıyor)
+    sha256 = hashlib.sha256()
+    for chunk in uploaded_file.chunks():
+        sha256.update(chunk)
+    file_sha256 = sha256.hexdigest()
+    uploaded_file.seek(0)  # Sonraki okumalar için dosya başına dön
+
+    # 5c. HMAC imza kontrolü  (branch_id + zip_filename + timestamp + file_sha256)
+    message = f"{branch_id}{uploaded_file.name}{timestamp}{file_sha256}"
     if not validate_hmac(branch_id, bayi.secret_key, signature, message):
         return JsonResponse(
             {"status": "error", "message": "Güvenlik doğrulaması başarısız"}, status=403
+        )
+
+    # 5d. Replay attack koruması — aynı imza 5 dk içinde tekrar gelirse reddet
+    window_start = timezone.now() - timedelta(seconds=TIMESTAMP_TOLERANCE_SECONDS)
+    if TransferLog.objects.filter(signature=signature, created_at__gte=window_start).exists():
+        return JsonResponse(
+            {"status": "error", "message": "Tekrarlanan istek reddedildi"}, status=409
         )
 
     # 6. PENDING log oluştur
@@ -457,6 +529,7 @@ def enterprise_upload(request):
         bayi=bayi,
         filename=uploaded_file.name,
         status="PENDING",
+        signature=signature,
         ip_address=request.META.get("REMOTE_ADDR"),
     )
 
