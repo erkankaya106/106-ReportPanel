@@ -512,7 +512,8 @@ def mpi_raw_transactions_data(request):
 
     # 5c. HMAC imza kontrolü  (branch_id + zip_filename + timestamp + file_sha256)
     message = f"{branch_id}{uploaded_file.name}{timestamp}{file_sha256}"
-    if not validate_hmac(branch_id, bayi.secret_key, signature, message):
+    secret_key = bayi.get_secret_key()  # Decrypt edilmiş secret key'i al
+    if not validate_hmac(branch_id, secret_key, signature, message):
         return JsonResponse(
             {"status": "error", "message": "Güvenlik doğrulaması başarısız"}, status=403
         )

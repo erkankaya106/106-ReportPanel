@@ -1,12 +1,45 @@
 import secrets
+import hashlib
+import base64
 
 from django.db import models
+from django.conf import settings
+from cryptography.fernet import Fernet
 import uuid
+
+
+def _get_fernet():
+    """Fernet instance'ı döndürür. ENCRYPTION_KEY'i kullanır."""
+    encryption_key = settings.ENCRYPTION_KEY.encode('utf-8')
+    # Fernet 32-byte key bekler, eğer daha uzunsa hash'le
+    if len(encryption_key) != 32:
+        encryption_key = hashlib.sha256(encryption_key).digest()
+    else:
+        encryption_key = encryption_key[:32]
+    # Fernet base64-encoded key bekler
+    fernet_key = base64.urlsafe_b64encode(encryption_key)
+    return Fernet(fernet_key)
+
+
+def _is_encrypted(value: str) -> bool:
+    """Bir değerin Fernet ile encrypt edilmiş olup olmadığını kontrol eder."""
+    if not value:
+        return False
+    try:
+        # Fernet token'ları base64 formatında ve belirli bir yapıya sahiptir
+        # Token formatı: base64(version + timestamp + IV + ciphertext + HMAC)
+        decoded = base64.urlsafe_b64decode(value)
+        # Fernet token en az 57 byte olmalı (1 byte version + 8 byte timestamp + 16 byte IV + en az 32 byte)
+        return len(decoded) >= 57
+    except Exception:
+        return False
+
 
 class Bayi(models.Model):
     name = models.CharField(max_length=255, verbose_name="Bayi Adı")
     branch_id = models.CharField(max_length=50, unique=True, verbose_name="Branch ID")
-    secret_key = models.CharField(max_length=128, verbose_name="Secret Key")
+    secret_key = models.CharField(max_length=500, verbose_name="Secret Key")  # Encrypt edilmiş hali daha uzun olabilir
+    _temp_secret_key = models.CharField(max_length=128, null=True, blank=True, editable=False, verbose_name="Geçici Secret Key")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -18,11 +51,56 @@ class Bayi(models.Model):
         """Güçlü, random secret key üretir."""
         return secrets.token_urlsafe(32)  # ~43 karakter, URL-safe
 
-    def save(self, *args, **kwargs):
-        # Boşsa otomatik üret
+    def get_secret_key(self) -> str:
+        """
+        HMAC doğrulaması için decrypt edilmiş secret key döndürür.
+        Eğer secret_key zaten düz metinse (eski kayıtlar için), olduğu gibi döndürür.
+        """
         if not self.secret_key:
-            self.secret_key = self.generate_secret_key()
-        super().save(*args, **kwargs)
+            return ""
+        
+        # Eğer encrypt edilmişse decrypt et
+        if _is_encrypted(self.secret_key):
+            try:
+                fernet = _get_fernet()
+                return fernet.decrypt(self.secret_key.encode('utf-8')).decode('utf-8')
+            except Exception:
+                # Decrypt başarısız olursa, eski format olabilir
+                return self.secret_key
+        else:
+            # Eski kayıtlar için düz metin olabilir
+            return self.secret_key
+
+    def save(self, *args, **kwargs):
+        # _temp_secret_key'i sakla (save sonrası temizlemek için)
+        temp_key = self._temp_secret_key
+        
+        # İlk kayıt: secret_key boşsa ve _temp_secret_key varsa
+        if not self.secret_key and self._temp_secret_key:
+            # _temp_secret_key'i encrypt ederek secret_key'e kaydet
+            fernet = _get_fernet()
+            self.secret_key = fernet.encrypt(self._temp_secret_key.encode('utf-8')).decode('utf-8')
+        # Secret key düz metinse (eski kayıt veya manuel giriş), encrypt et
+        elif self.secret_key and not _is_encrypted(self.secret_key):
+            fernet = _get_fernet()
+            self.secret_key = fernet.encrypt(self.secret_key.encode('utf-8')).decode('utf-8')
+        # _temp_secret_key varsa (yeni key üretildi), bunu secret_key'e encrypt ederek kaydet
+        elif self._temp_secret_key:
+            fernet = _get_fernet()
+            self.secret_key = fernet.encrypt(self._temp_secret_key.encode('utf-8')).decode('utf-8')
+        
+        # _temp_secret_key'i None yap (DB'ye kaydedilmesin, sadece memory'de kalsın)
+        # Çünkü admin panelinde gösterilmesi için memory'de kalması gerekiyor
+        # DB'ye kaydetmeden önce None yapıyoruz
+        if temp_key:
+            # Önce save et (secret_key encrypt edilmiş olarak kaydedilecek)
+            super().save(*args, **kwargs)
+            # Sonra _temp_secret_key'i DB'den temizle ama memory'de tut (admin'de gösterilmek için)
+            Bayi.objects.filter(pk=self.pk).update(_temp_secret_key=None)
+            # Memory'deki değeri koru (admin response'da gösterilmek için)
+            # Bu değer bir sonraki request'te zaten yok olacak
+        else:
+            super().save(*args, **kwargs)
     
     class Meta:
         verbose_name_plural = "Alt Bayiler"
