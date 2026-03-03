@@ -23,6 +23,9 @@ class Bayi(models.Model):
         if not self.secret_key:
             self.secret_key = self.generate_secret_key()
         super().save(*args, **kwargs)
+    
+    class Meta:
+        verbose_name_plural = "Alt Bayiler"
 
 class TransferLog(models.Model):
     STATUS_CHOICES = [
@@ -42,6 +45,7 @@ class TransferLog(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        verbose_name_plural = "Bayi Data Transfer Logları"
 
 
 class CSVValidationError(models.Model):
